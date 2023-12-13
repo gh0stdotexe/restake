@@ -4,9 +4,12 @@ import { timeStamp } from '../utils/Helpers.mjs'
 
 class Health {
   constructor(config, opts) {
-    const { address, uuid, name, apiKey, timeout, gracePeriod } = config || {}
+    const { address, uuid, name, apiKey, timeout, gracePeriod, type } = config || {}
     const { dryRun, networkName } = opts || {}
-    this.address = address || 'https://hc-ping.com'
+    this.type = type || 'healthchecks';
+    this.address = type === 'betterstack' ? 
+      (address || 'https://uptime.betterstack.com/api/v1/heartbeat') : 
+      (address || 'https://hc-ping.com')
     this.name = name || networkName
     this.gracePeriod = gracePeriod || 86400   // default 24 hours
     this.timeout = timeout || 86400           // default 24 hours
@@ -14,9 +17,12 @@ class Health {
     this.apiKey = apiKey
     this.dryRun = dryRun
     this.logs = []
-    this.getOrCreateHealthCheck()
 
-    if (address) {
+    if (this.type === 'healthchecks') {
+      this.getOrCreateHealthCheck()
+    }
+    
+    if (address && this.type === 'healthchecks') {
       // This is necessary as the default provider - hc-ping.com - has a built in ping mechanism
       // whereas providing self-hosted addresses do NOT. 
       // https://healthchecks.selfhosted.com/ping/{uuid} rather than https://hc-ping.com/{uuid}
@@ -50,29 +56,29 @@ class Health {
   }
 
   async getOrCreateHealthCheck(...args) {
-    if (!this.apiKey) return;
-
-    let config = {
-      headers: {
-        "X-Api-Key": this.apiKey,
+    if (this.apiKey && this.type === 'healthchecks') {
+      let config = {
+        headers: {
+          "X-Api-Key": this.apiKey,
+        }
       }
-    }
 
-    let data = {
-      "name": this.name, "channels": "*", "timeout": this.timeout, "grace": this.gracePeriod, "unique": ["name"]
-    }
+      let data = {
+        "name": this.name, "channels": "*", "timeout": this.timeout, "grace": this.gracePeriod, "unique": ["name"]
+      }
 
-    try {
-      await axios.post([this.address, 'api/v2/checks/'].join('/'), data, config).then((res) => {
-        this.uuid = res.data.ping_url.split('/')[4]
-      });
-    } catch (error) {
-      timeStamp("Health Check creation failed: " + error)
+      try {
+        await axios.post([this.address, 'api/v2/checks/'].join('/'), data, config).then((res) => {
+          this.uuid = res.data.ping_url.split('/')[4]
+        });
+      } catch (error) {
+        timeStamp("Health Check creation failed: " + error)
+      }
     }
   }
 
   async sendLog() {
-    await this.ping('log', this.logs)
+    await this.ping('log', this.logs.join("\n"))
     this.logs = []
   }
 
@@ -80,9 +86,16 @@ class Health {
     if (!this.uuid) return
     if (this.dryRun) return timeStamp('DRYRUN: Skipping health check ping')
 
+    let url = '';
+    if (this.type === 'betterstack') {
+      url = [this.address, this.uuid].join('/')
+    } else {
+      url = _.compact([this.address, this.uuid, action]).join('/')
+    }
+
     return axios.request({
       method: 'POST',
-      url: _.compact([this.address, this.uuid, action]).join('/'),
+      url : url, 
       data: logs.join("\n")
     }).catch(error => {
       timeStamp('Health ping failed', error.message)
